@@ -13,15 +13,16 @@ from livekit.plugins import (
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livekit.agents.beta.workflows import GetEmailTask
 
-from utils import load_prompt
+from utils import load_prompt, sendEmail, to_epoch, checkAvaliability, verify_phone, verify_email
 
 load_dotenv(".env.local")
 
 @dataclass 
 class AppointmentInfo:
+    has_referral: bool | None = None
     referred_physician: str | None = None
-    preferred_appointment_date: str | None = None
-    preferred_appointment_time: str | None = None
+    appointment_date: str | None = None
+    appointment_time: str | None = None
 
 @dataclass
 class PatientInfo:
@@ -42,48 +43,91 @@ class SchedulingAgent(Agent):
     async def on_enter(self) -> None:
         await self.session.generate_reply(
             instructions="""
-                Thank them for the info and now find out their preferred appointment date and time.",
-            """
+                Thank them for the info and now find out their preferred appointment date and time.
+            """,
         )
+
+    @function_tool()
+    async def record_has_referral(self, context: RunContext[PatientInfo], has_referral: bool):
+        """Record the referred physician's name."""
+        # store referral info in the nested appointment_info
+        context.userdata.appointment_info.has_referral = has_referral
+        return self._handoff_if_done(context)
     
     @function_tool()
     async def record_referred_physician(self, context: RunContext[PatientInfo], referred_physician: str):
         """Record the referred physician's name."""
-        context.userdata.referred_physician = referred_physician
-        return self._handoff_if_done()
+        context.userdata.appointment_info.referred_physician = referred_physician
+        return self._handoff_if_done(context)
 
     @function_tool()
-    async def record_preferred_appointment_date(self, context: RunContext[PatientInfo], preferred_appointment_date: str):
+    async def record_appointment_date(self, context: RunContext[PatientInfo], appointment_date: str):
         """Record the user's preferred appointment date."""
-        context.userdata.preferred_appointment_date = preferred_appointment_date
-        return self._handoff_if_done()
+        context.userdata.appointment_info.appointment_date = appointment_date
+        return self._handoff_if_done(context)
 
     @function_tool()
-    async def record_preferred_appointment_time(self, context: RunContext[PatientInfo], preferred_appointment_time: str):
+    async def record_appointment_time(self, context: RunContext[PatientInfo], appointment_time: str):
         """Record the user's preferred appointment time."""
-        context.userdata.preferred_appointment_time = preferred_appointment_time
-        return self._handoff_if_done()
+        context.userdata.appointment_info.appointment_time = appointment_time
+        return self._handoff_if_done(context)
     
-    def _handoff_if_done(self):
-        def all_info_collected(userdata: PatientInfo) -> bool:
-            return all([
-                userdata.appointment_info.preferred_appointment_date is not None,
-                userdata.appointment_info.preferred_appointment_time is not None,
-            ])
-        print("Current collected info:", self.session.userdata) # Debugging line
-        if all_info_collected(self.session.userdata):
-            return "All information collected. Confirm all user details before scheduling the appointment."
+    def _handoff_if_done(self, context: RunContext[PatientInfo]):
+        ai = self.session.userdata.appointment_info
+
+        if ai.appointment_date is not None and ai.appointment_time is not None:
+            # If user indicated they have a referral, ensure we have the referring physician
+            if ai.has_referral is True and ai.referred_physician is None:
+                return "You mentioned you have a referral, please provide the referring physician's name."
+            return self.confirm_and_end(context, false)
         else:
-            return "Information recorded. Continue gathering missing details. Insist it is neccesary, do not proceed until all required information is collected. Don't say goodbye, stay on the line until they hang up."
+            return (
+                "Information recorded. Continue gathering missing details. "
+                "Insist it is necessary; do not proceed until all required information is collected. "
+                "Don't say goodbye; stay on the line until they hang up."
+            )
     
     @function_tool()
-    async def confirm_and_end(self, context: RunContext[PatientInfo], confirm: bool):
-        """When the user confirms all details, forward to SchedulingAgent."""
-        if confirm:
+    async def confirm_and_end(self, context: RunContext[PatientInfo], confirmed: bool):
+        """When the user confirms all details, check avaliability and sendemail."""
+        if confirmed:
             print("Final collected patient info:", self.session.userdata) # Debugging line
-            return "I will now schedule your appointment. Thank you for choosing HelloHealth. Goodbye!"
+            ai = self.session.userdata.appointment_info
+            if checkAvaliability(ai.appointment_date, ai.appointment_time, ai.referred_physician):
+                if sendEmail(self.session.userdata):
+                    try:
+                        await self.session.close()
+                    except Exception:
+                        # guard in case session is not present or closing fails
+                        pass
+                    return "We have scheduled your appointment. Thank you for choosing HelloHealth. Goodbye!"
+                else:
+                    return "Sorry, there was an error scheduling your appointment. Please call again later."
+            else:
+                self._provideOtherTimes()
         else:
-            return "Okay, please let me know what details need to be updated."
+            return "Here are the details you provided. PLease let me know what details need to be updated, or confirm if they are correct."
+    
+    def _provideOtherTimes(self):
+        return """Sorry, that time is not available. Here are some other available times near it.
+         Please select one. Generate a list of 3 available times within 2 days of the requested date and time."""
+
+    @function_tool()
+    async def accepted_alternative(self, context: RunContext[PatientInfo], accepted_alternative: bool):
+        """When the user accepts an alternative time, finalize the appointment."""
+        if accepted_alternative:
+            if sendEmail(self.session.userdata):
+                try:
+                    await self.session.close()
+                except Exception:
+                    # guard in case session is not present or closing fails
+                    pass
+                return "We have scheduled your appointment. Thank you for choosing HelloHealth. Goodbye!"
+            else:
+                return "Sorry, there was an error scheduling your appointment. Please call again later."
+        else:
+            return _provideOtherTimes()
+
 
 class IntakeAgent(Agent):
     def __init__(self) -> None:
@@ -137,13 +181,21 @@ class IntakeAgent(Agent):
     @function_tool()
     async def record_phone_number(self, context: RunContext[PatientInfo], phone_number: str):
         """Record the user's phone number."""
-        context.userdata.phone_number = phone_number
+        parsed = verify_phone(phone_number)
+        print(parsed)
+        if parsed:
+            context.userdata.phone_number = parsed
+        else:
+            return "The phone number provided seems invalid. Please provide a valid phone number including area code."
         return self._handoff_if_done()
 
     @function_tool()
     async def record_email(self, context: RunContext[PatientInfo], email: str):
         """Record the user's email address."""
-        context.userdata.email = email
+        if verify_email(email):
+            context.userdata.email = email
+        else:
+            return "The email address provided seems invalid. Please provide a valid email address."
         return self._handoff_if_done()
 
     def _handoff_if_done(self):
@@ -188,7 +240,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     await session.start(
         room=ctx.room,
-        agent=IntakeAgent(),
+        agent=SchedulingAgent(),
         room_input_options=RoomInputOptions(
             # For telephony applications, use `BVCTelephony` instead for best results
             noise_cancellation=noise_cancellation.BVC(), 
