@@ -4,6 +4,8 @@ import yaml
 import dateparser
 import time
 import random
+import csv
+from typing import Dict, List
 
 import phonenumbers
 from phonenumbers import NumberParseException, is_valid_number, format_number, PhoneNumberFormat
@@ -47,10 +49,11 @@ def load_prompt(filename):
 
 def sendEmail(userdata) -> bool:
     # Here you would integrate with an actual email service
+    print("Preparing to send email...")
     email_content = f"""
         Thank you for calling HelloHealth. Here are the details of your appointment request, we look forward to seeing you!
-        Date and Time: {userdata.appointment_info.preferred_appointment_date} {userdata.appointment_info.preferred_appointment_time}
-        Physician: {userdata.appointment_info.referred_physician}
+        Date and Time: {userdata.appointment_info.appointment_date} {userdata.appointment_info.appointment_time}
+        Physician: {userdata.appointment_info.physician}
         Patient Name: {userdata.patient_name}
         Date of Birth: {userdata.date_of_birth}
         Insurance Payer: {userdata.insurance_payer_name}
@@ -63,7 +66,19 @@ def sendEmail(userdata) -> bool:
     print(email_content)
     return True
 
-def checkAvaliability(date_str: str, time_str: str, doctor: str) -> bool:
-    # Dummy implementation, in real life this would check a database or API
-    # Return a random True/False to simulate availability
-    return random.choice([True, False])
+def getAvaliability(time_str: str, doctor: str) -> bool:
+    return time_str
+
+def load_doctors(csv_file: str) -> Dict[str, List[str]]:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    prompt_path = os.path.join(script_dir, "fakedata", "doctors.csv")
+    schedule = {}
+    with open(csv_file, newline="") as f:
+        reader = csv.reader(f)
+        for row in reader:
+            if not row:  # skip empty lines
+                continue
+            doctor = row[0].strip()
+            times = [t.strip() for t in row[1:] if t.strip()]
+            schedule[doctor] = times
+    return schedule
