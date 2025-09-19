@@ -89,7 +89,7 @@ def load_prompt(filename):
         logger.exception("Error loading prompt file %s: %s", filename, e)
         return ""
 
-def send_email(userdata) -> bool:
+async def send_email(userdata) -> bool:
     """Prepare and (stub) send an email summary of the appointment request.
 
     This is a placeholder. Integrate with a real email provider in production.
@@ -117,37 +117,37 @@ def send_email(userdata) -> bool:
 
 # Regex to strip "Dr." if present
 def normalize_name(name: str) -> str:
-    """Normalize a doctor's name by removing a leading 'Dr.' and trimming whitespace."""
+    """Normalize a physician's name by removing a leading 'Dr.' and trimming whitespace."""
     pattern = r"^(?:Dr\.?\s+)?([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*)"
     match = re.match(pattern, name.strip())
     return match.group(1) if match else name.strip()
 
-def verify_doctor(doctor: str) -> Tuple[bool, Optional[List[str]]]:
-    """Check whether the provided doctor name matches names in the fake doctors CSV.
+def verify_physician(physician: str) -> Tuple[bool, Optional[List[str]]]:
+    """Check whether the provided physician name matches names in the fake physicians CSV.
 
     Returns (True, [matches]) if found; otherwise (False, list_of_all_names).
     """
-    doctor_info = load_doctors("fakedata/doctors.csv")
-    cleaned_name = normalize_name(doctor)
-    for doc in doctor_info.keys():
+    physician_info = load_physicians("physicians.csv")
+    cleaned_name = normalize_name(physician)
+    for doc in physician_info.keys():
         if cleaned_name.lower() in doc.lower():
             return True, [doc]
-    return False, doctor_info.keys()
+    return False, physician_info.keys()
 
-def get_avaliability(time_str: str, physician: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
-    """Return an available (doctor, time) tuple for the requested slot.
+async def get_avaliability(time_str: str, physician: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """Return an available (physician, time) tuple for the requested slot.
 
     If `physician` is provided, prefer that physician and return the nearest time.
-    If `physician` is None, search for the first doctor with a matching rounded time slot.
+    If `physician` is None, search for the first physician with a matching rounded time slot.
     """
-    doctor_info = load_doctors("fakedata/doctors.csv")
+    physician_info = load_physicians("physicians.csv")
     if physician is not None:
-        if time_str in doctor_info[physician]:
+        if time_str in physician_info[physician]:
             return physician, time_str
-        return physician, nearest_time(time_str, doctor_info[physician])
+        return physician, nearest_time(time_str, physician_info[physician])
 
     rounded = round_to_nearest_half_hour(time_str)
-    for doc, times in doctor_info.items():
+    for doc, times in physician_info.items():
         if rounded in times:
             return doc, rounded
     return None, None
@@ -185,11 +185,11 @@ def round_to_nearest_half_hour(time_str: str) -> str:
     rounded_time = t.replace(hour=new_hour % 24, minute=new_minute)
     return rounded_time.strftime("%H:%M")
 
-def load_doctors(csv_file: str) -> Dict[str, List[str]]:
-    """Load doctors' availability from a CSV file in `fakedata/`.
+def load_physicians(csv_file: str) -> Dict[str, List[str]]:
+    """Load physicians' availability from a CSV file in `fakedata/`.
 
-    Each row should start with the doctor's name followed by zero or more HH:MM time slots.
-    Returns a dict mapping doctor name -> list of HH:MM strings.
+    Each row should start with the physician's name followed by zero or more HH:MM time slots.
+    Returns a dict mapping physician name -> list of HH:MM strings.
     """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     csv_path = os.path.join(script_dir, "fakedata", csv_file)
@@ -201,13 +201,13 @@ def load_doctors(csv_file: str) -> Dict[str, List[str]]:
             for row in reader:
                 if not row:
                     continue
-                doctor = row[0].strip()
+                physician = row[0].strip()
                 times = [t.strip() for t in row[1:] if t.strip()]
-                schedule[doctor] = times
+                schedule[physician] = times
     except FileNotFoundError:
-        logger.exception("Doctors CSV not found: %s", csv_path)
+        logger.exception("Physicians CSV not found: %s", csv_path)
     except Exception:
-        logger.exception("Failed to load doctors CSV: %s", csv_path)
+        logger.exception("Failed to load physicians CSV: %s", csv_path)
     return schedule
 
 

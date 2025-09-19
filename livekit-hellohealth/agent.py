@@ -13,7 +13,7 @@ from livekit.plugins import (
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livekit.agents.beta.workflows import GetEmailTask
 
-from utils import load_prompt, send_email, get_avaliability, verify_phone, verify_email, verify_doctor, to_date_string, to_time_string
+from utils import load_prompt, send_email, get_avaliability, verify_phone, verify_email, verify_physician, to_date_string, to_time_string
 
 load_dotenv(".env.local")
 import logging
@@ -61,20 +61,20 @@ class SchedulingAgent(Agent):
         """Record whether the patient has a referral."""
         # store referral info in the nested appointment_info
         context.userdata.appointment_info.has_referral = has_referral
-        return self._handoff_if_done()
+        return await self._handoff_if_done(context)
     
     @function_tool()
     async def record_physician(self, context: RunContext[PatientInfo], physician: str):
         """Record the physician name after validating against our provider list."""
         try:
-            success, valid_names = verify_doctor(physician)
+            success, valid_names = verify_physician(physician)
         except Exception:
-            logger.exception("verify_doctor failed")
+            logger.exception("verify_physician failed")
             return "Sorry — I couldn't validate the physician right now. Please try again or continue without a referral."
 
         if success and valid_names:
             context.userdata.appointment_info.physician = valid_names[0]
-            return self._handoff_if_done()
+            return await self._handoff_if_done(context)
 
         choices = ", ".join(valid_names) if valid_names else ""
         return (
@@ -92,21 +92,22 @@ class SchedulingAgent(Agent):
             return "The date provided seems invalid. Please provide a valid date for your appointment."
 
         context.userdata.appointment_info.appointment_date = formatted_date
-        return self._handoff_if_done()
+        return await self._handoff_if_done(context)
 
     @function_tool()
     async def record_appointment_time(self, context: RunContext[PatientInfo], appointment_time: str):
         """Record the user's preferred appointment time."""
+        logger.info("Raw appointment time input: %s", appointment_time)
         try:
             formatted_time = to_time_string(appointment_time)
         except Exception:
             logger.exception("Invalid appointment time: %s", appointment_time)
             return "The time provided seems invalid. Please provide a valid time for your appointment."
-
+        logger.info("formatted appointment time input: %s", formatted_time)
         context.userdata.appointment_info.appointment_time = formatted_time
-        return self._handoff_if_done()
+        return await self._handoff_if_done(context)
     
-    def _handoff_if_done(self) -> str:
+    async def _handoff_if_done(self, context: RunContext[PatientInfo]) -> str:
         """Check whether we have enough appointment info and return the next prompt.
 
         This function returns a short instruction string that the agent will speak.
@@ -114,12 +115,10 @@ class SchedulingAgent(Agent):
         """
         ai = self.session.userdata.appointment_info
 
-        if ai.appointment_date and ai.appointment_time:
+        if ai.appointment_date and ai.appointment_time and ai.has_referral is not None:
             if ai.has_referral is True and not ai.physician:
                 return "You mentioned you have a referral — please provide the referring physician's name."
-
-            return "All appointment details collected. Please confirm these details so I can schedule the appointment."
-
+            return await self.confirm_and_end(context, False)
         return (
             "Information recorded. Continue gathering the missing details. "
             "Please do not end the call until we finish collecting the required information."
@@ -128,46 +127,61 @@ class SchedulingAgent(Agent):
     @function_tool()
     async def confirm_and_end(self, context: RunContext[PatientInfo], confirmed: bool):
         """When the user confirms all details, check avaliability and send_email."""
+        logger.info("User confirmed: %s", confirmed)
         if confirmed:
             logger.info("Final collected patient info: %s", self.session.userdata)
 
             try:
-                success = await self._finalize_and_close()
+                success = await self._finalize_datetime_and_send_email()
             except Exception:
-                logger.exception("_finalize_and_close failed")
+                logger.exception("_finalize_datetime_and_send_email failed")
                 success = False
 
             if success:
-                return (
-                    "We have scheduled your appointment. If an email was provided, a confirmation has been sent. "
-                    "Thank you for choosing HelloHealth. Goodbye!"
-                )
+                ai = self.session.userdata.appointment_info
+                try:
+                    await self.session.generate_reply(
+                            instructions=(
+                                "Tell them it was scheduled successfully."
+                                "Tell them If an email was provided, a confirmation has been sent. "
+                                "Thank them for choosing HelloHealth. Goodbye!"
+                            )
+                        )
+                except Exception:
+                    logger.exception("Failed to notify user of final confirmation")
 
+                try:
+                    await self.session.aclose()
+                except Exception:
+                    logger.exception("Failed to close session cleanly")
+
+                return "Goodbye!"
             return "Sorry — there was an error scheduling your appointment. Please call again later."
         else:
             return "Here are the details you provided. Please let me know what details need to be updated, or confirm if they are correct."
 
-    async def _finalize_and_close(self) -> bool:
+    async def _finalize_datetime_and_send_email(self) -> bool:
         """Perform availability check, send notification, reply, and close the session..
         """
         ai = self.session.userdata.appointment_info
 
         try:
-            doctor, available_time = get_avaliability(ai.appointment_time, ai.physician)
+            physician, available_time = await get_avaliability(ai.appointment_time, ai.physician)
         except Exception:
             logger.exception("get_avaliability failed")
             return False
 
-        if not doctor or not available_time:
+        if not physician or not available_time:
             logger.info("No availability for %s at %s", ai.physician, ai.appointment_time)
             return False
+        ai.physician = physician
 
         if ai.appointment_time != available_time:
             ai.appointment_time = available_time
             try:
                 await self.session.generate_reply(
                     instructions=(
-                        f"Your preferred time is unavailable. The nearest available time with {doctor} is {available_time}; "
+                        f"Your preferred time is unavailable. The nearest available time with {physician} is {available_time}; "
                         "I will book that instead."
                     )
                 )
@@ -175,7 +189,7 @@ class SchedulingAgent(Agent):
                 logger.exception("Failed to notify user of adjusted time")
 
         try:
-            emailed = send_email(self.session.userdata)
+            emailed = await send_email(self.session.userdata)
         except Exception:
             logger.exception("send_email failed")
             emailed = False
@@ -183,11 +197,6 @@ class SchedulingAgent(Agent):
         if not emailed:
             logger.warning("Email scheduling failed for user: %s", self.session.userdata)
             return False
-
-        try:
-            await self.session.close()
-        except Exception:
-            logger.exception("Failed to close session cleanly")
 
         return True
 
