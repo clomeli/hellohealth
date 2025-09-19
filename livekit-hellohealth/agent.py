@@ -13,7 +13,7 @@ from livekit.plugins import (
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livekit.agents.beta.workflows import GetEmailTask
 
-from utils import load_prompt, sendEmail, to_epoch, getAvaliability, verify_phone, verify_email
+from utils import load_prompt, sendEmail, getAvaliability, verify_phone, verify_email, verify_doctor, to_date_string, to_time_string
 
 load_dotenv(".env.local")
 
@@ -57,20 +57,32 @@ class SchedulingAgent(Agent):
     @function_tool()
     async def record_physician(self, context: RunContext[PatientInfo], physician: str):
         """Record the referred physician's name."""
-        # TODO validate physician name against known list
-        context.userdata.appointment_info.physician = physician
+        success, valid_names = verify_doctor(physician)
+        if success:
+            context.userdata.appointment_info.physician = valid_names[0]
+        if not success:
+            return f"""The physician name provided does not match our records. Valid names are: {', '.join(valid_names)}.
+             Please provide a valid physician name. Or say continue without a referral."""
         return self._handoff_if_done()
 
     @function_tool()
     async def record_appointment_date(self, context: RunContext[PatientInfo], appointment_date: str):
         """Record the user's preferred appointment date."""
-        context.userdata.appointment_info.appointment_date = appointment_date
+        try:
+            formatted_date = to_date_string(appointment_date)
+        except Exception:
+            return "The date provided seems invalid. Please provide a valid date and time for your appointment."
+        context.userdata.appointment_info.appointment_date = formatted_date
         return self._handoff_if_done()
 
     @function_tool()
     async def record_appointment_time(self, context: RunContext[PatientInfo], appointment_time: str):
         """Record the user's preferred appointment time."""
-        context.userdata.appointment_info.appointment_time = appointment_time
+        try:
+            formatted_time = to_time_string(appointment_time)
+        except Exception:
+            return "The date provided seems invalid. Please provide a valid date and time for your appointment."
+        context.userdata.appointment_info.appointment_time = formatted_time
         return self._handoff_if_done()
     
     def _handoff_if_done(self):
@@ -94,76 +106,57 @@ class SchedulingAgent(Agent):
         """When the user confirms all details, check avaliability and sendemail."""
         if confirmed:
             print("Final collected patient info:", self.session.userdata) # Debugging line
-            ai = self.session.userdata.appointment_info
-            success, err = await self._finalize_and_close()
+            success = await self._finalize_and_close()
             if success:
                 return "We have scheduled your appointment. Thank you for choosing HelloHealth. Goodbye!"
-            if err == "time_unavailable":
-                return self._provideOtherTimes()
             return "Sorry, there was an error scheduling your appointment. Please call again later."
         else:
             return "Here are the details you provided. Please let me know what details need to be updated, or confirm if they are correct."
 
-    async def _finalize_and_close(self) -> tuple[bool, str | None]:
-        """Perform availability check, send notification, reply, and close the session.
-
-        Returns (success, error_code) where error_code may be 'time_unavailable' or 'email_failed'.
+    async def _finalize_and_close(self) -> bool:
+        """Perform availability check, send notification, reply, and close the session..
         """
         ai = self.session.userdata.appointment_info
 
-        # 1) Check availability
         try:
-            available = getAvaliability(ai.appointment_time, ai.physician)
-            print(f"Availability check returned: {available}")
+            doctor, available_time = getAvaliability(ai.appointment_time, ai.physician)
         except Exception:
-            available = False
+            doctor, available_time = None, None 
 
-        if not available:
-            return False, "time_unavailable"
-
-        # 2) Send email / perform scheduling
+        if doctor is None or available_time is None:
+            return False
+        
+        if ai.appointment_time != available_time:
+            ai.appointment_time = available_time
+            print("Avaliability check result:", doctor, available_time, "asked :", ai.appointment_time) # Debugging line
+            await self.session.generate_reply(
+                instructions=(
+                    f"Tell the user their preferred time is not available. The nearest available time with {doctor} is {available_time}. "
+                    "And you are booking them for that time instead. Do not ask for confirmation."
+                )
+            )
+        
         try:
             emailed = sendEmail(self.session.userdata)
         except Exception:
             emailed = False
 
         if not emailed:
-            return False, "email_failed"
+            return False
 
-        # 3) Send final spoken/text reply before closing
-        try:
-            await self.session.generate_reply(
-                instructions=(
-                    "Thank you — your appointment request has been scheduled. "
-                    "We'll follow up with confirmation by email. Goodbye!"
-                )
+        await self.session.generate_reply(
+            instructions=(
+                "Thank you — your appointment request has been scheduled. "
+                "If you provied an email, you will receive a confirmation shortly. "
             )
-        except Exception:
-            pass
+        )
 
-        # 4) Close the session
         try:
             await self.session.close()
         except Exception:
             pass
 
-        return True, None
-    
-    def _provideOtherTimes(self):
-        return """Sorry, that time is not available. Here are some other available times near it.
-         Please select one. Generate a list of 3 available times within 2 days of the requested date and time."""
-
-    @function_tool()
-    async def accepted_alternative(self, context: RunContext[PatientInfo], accepted_alternative: bool):
-        """When the user accepts an alternative time, finalize the appointment."""
-        if accepted_alternative:
-            success, err = await self._finalize_and_close()
-            if success:
-                return "We have scheduled your appointment. Thank you for choosing HelloHealth. Goodbye!"
-            return "Sorry, there was an error scheduling your appointment. Please call again later."
-        else:
-            return self._provideOtherTimes()
-
+        return True
 
 class IntakeAgent(Agent):
     def __init__(self) -> None:
@@ -244,7 +237,6 @@ class IntakeAgent(Agent):
                 userdata.reason_for_visit is not None,
                 userdata.address is not None,
                 userdata.phone_number is not None,
-                userdata.email is not None,
             ])
         print("Current collected info:", self.session.userdata) # Debugging line
         if all_info_collected(self.session.userdata):
@@ -260,6 +252,11 @@ class IntakeAgent(Agent):
         """When the user confirms all details, forward to SchedulingAgent."""
         if confirm:
             print("Final collected patient info:", self.session.userdata) # Debugging line
+            await self.session.generate_reply(
+                instructions="""
+                            Thank them for the information provided. Ask for an optional confirmation email"
+                        """,
+            )
             return SchedulingAgent()
         else:
             return "Okay, please let me know what details need to be updated."
