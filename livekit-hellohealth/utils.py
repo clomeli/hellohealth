@@ -7,6 +7,8 @@ import random
 import csv
 from typing import Dict, List
 import re
+from datetime import datetime
+
 
 import phonenumbers
 from phonenumbers import NumberParseException, is_valid_number, format_number, PhoneNumberFormat
@@ -22,7 +24,6 @@ def verify_email(email: str) -> bool:
 def verify_phone(phone: str, region: str = "US") -> str:
     try:
         parsed = phonenumbers.parse(phone, region)
-        print(f"parsed phone number: {parsed}")
         if is_valid_number(parsed):
             return format_number(parsed, PhoneNumberFormat.INTERNATIONAL)
         else:
@@ -86,23 +87,18 @@ def verify_doctor(doctor: str) -> tuple[bool, list[str] | None]:
             return True, [doc]
     return False, doctor_info.keys()
 
-from datetime import datetime
-
-
-def getAvaliability(datetime_str: str, physician: str) -> tuple[str | None, str | None]:
-    print("Requested availability for", physician, "at", time_str)
+def getAvaliability(time_str: str, physician: str) -> tuple[str | None, str | None]:
     doctor_info = load_doctors("fakedata/doctors.csv")
-    time_str = datetime_str.split(" ")[1]  # Extract time part
     if physician is not None:
         if time_str in doctor_info[physician]:
-            return physician, datetime_str
+            return physician, time_str
         else:
-            return physician, datetime_str.split(" ")[0] + nearest_time(time_str, doctor_info[physician])
+            return physician, nearest_time(time_str, doctor_info[physician])
     else:
         time = round_to_nearest_half_hour(time_str)
         for doc, times in doctor_info.items():
             if time in times:
-                return doc, datetime_str.split(" ")[0] + time
+                return doc, time
     return None, None
 
 # AI Gened function not throughly vetted

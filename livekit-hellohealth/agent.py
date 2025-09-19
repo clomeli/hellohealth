@@ -108,7 +108,7 @@ class SchedulingAgent(Agent):
             print("Final collected patient info:", self.session.userdata) # Debugging line
             success = await self._finalize_and_close()
             if success:
-                return "We have scheduled your appointment. Thank you for choosing HelloHealth. Goodbye!"
+                return "We have scheduled your appointment. If an email was provided confirmation has been sent. Thank you for choosing HelloHealth. Goodbye!"
             return "Sorry, there was an error scheduling your appointment. Please call again later."
         else:
             return "Here are the details you provided. Please let me know what details need to be updated, or confirm if they are correct."
@@ -122,13 +122,11 @@ class SchedulingAgent(Agent):
             doctor, available_time = getAvaliability(ai.appointment_time, ai.physician)
         except Exception:
             doctor, available_time = None, None 
-
         if doctor is None or available_time is None:
             return False
         
         if ai.appointment_time != available_time:
             ai.appointment_time = available_time
-            print("Avaliability check result:", doctor, available_time, "asked :", ai.appointment_time) # Debugging line
             await self.session.generate_reply(
                 instructions=(
                     f"Tell the user their preferred time is not available. The nearest available time with {doctor} is {available_time}. "
@@ -143,13 +141,6 @@ class SchedulingAgent(Agent):
 
         if not emailed:
             return False
-
-        await self.session.generate_reply(
-            instructions=(
-                "Thank you — your appointment request has been scheduled. "
-                "If you provied an email, you will receive a confirmation shortly. "
-            )
-        )
 
         try:
             await self.session.close()
