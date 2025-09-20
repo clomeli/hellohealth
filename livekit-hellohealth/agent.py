@@ -22,13 +22,6 @@ import logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-@dataclass 
-class AppointmentInfo:
-    has_referral: bool | None = None
-    physician: str | None = None
-    appointment_date: str | None = None
-    appointment_time: str | None = None
-
 @dataclass
 class PatientInfo:
     patient_name: str | None = None
@@ -40,7 +33,10 @@ class PatientInfo:
     phone_number: str | None = None
     provided_email: bool | None = None
     email: str | None = None
-    appointment_info: AppointmentInfo = AppointmentInfo()
+    has_referral: bool | None = None
+    physician: str | None = None
+    appointment_date: str | None = None
+    appointment_time: str | None = None
 
 class SchedulingAgent(Agent):
     def __init__(self) -> None:
@@ -60,8 +56,7 @@ class SchedulingAgent(Agent):
     @function_tool()
     async def record_has_referral(self, context: RunContext[PatientInfo], has_referral: bool):
         """Record whether the patient has a referral."""
-        # store referral info in the nested appointment_info
-        context.userdata.appointment_info.has_referral = has_referral
+        context.userdata.has_referral = has_referral
         return await self._handoff_if_done(context)
     
     @function_tool()
@@ -74,7 +69,7 @@ class SchedulingAgent(Agent):
             return "Sorry — I couldn't validate the physician right now. Please try again or continue without a referral."
 
         if success and valid_names:
-            context.userdata.appointment_info.physician = valid_names[0]
+            context.userdata.physician = valid_names[0]
             return await self._handoff_if_done(context)
 
         choices = ", ".join(valid_names) if valid_names else ""
@@ -92,7 +87,7 @@ class SchedulingAgent(Agent):
             logger.exception("Invalid appointment date: %s", appointment_date)
             return "The date provided seems invalid. Please provide a valid date for your appointment."
 
-        context.userdata.appointment_info.appointment_date = formatted_date
+        context.userdata.appointment_date = formatted_date
         return await self._handoff_if_done(context)
 
     @function_tool()
@@ -105,7 +100,7 @@ class SchedulingAgent(Agent):
             logger.exception("Invalid appointment time: %s", appointment_time)
             return "The time provided seems invalid. Please provide a valid time for your appointment."
         logger.info("formatted appointment time input: %s", formatted_time)
-        context.userdata.appointment_info.appointment_time = formatted_time
+        context.userdata.appointment_time = formatted_time
         return await self._handoff_if_done(context)
     
     async def _handoff_if_done(self, context: RunContext[PatientInfo]) -> str:
@@ -114,10 +109,8 @@ class SchedulingAgent(Agent):
         This function returns a short instruction string that the agent will speak.
         It does not perform any side effects.
         """
-        ai = self.session.userdata.appointment_info
-
-        if ai.appointment_date and ai.appointment_time and ai.has_referral is not None:
-            if ai.has_referral is True and not ai.physician:
+        if self.session.userdata.appointment_date and self.session.userdata.appointment_time and self.session.userdata.has_referral is not None:
+            if self.session.userdata.has_referral is True and not self.session.userdata.physician:
                 return "You mentioned you have a referral — please provide the referring physician's name."
             return await self.confirm_and_end(context, False)
         return (
@@ -139,7 +132,6 @@ class SchedulingAgent(Agent):
                 success = False
 
             if success:
-                ai = self.session.userdata.appointment_info
                 try:
                     await self.session.generate_reply(
                             instructions=(
@@ -159,21 +151,19 @@ class SchedulingAgent(Agent):
     async def _finalize_datetime_and_send_email(self) -> bool:
         """Perform availability check, send notification, reply, and close the session..
         """
-        ai = self.session.userdata.appointment_info
-
         try:
-            physician, available_time = await get_avaliability(ai.appointment_time, ai.physician)
+            physician, available_time = await get_avaliability(self.session.userdata.appointment_time, self.session.userdata.physician)
         except Exception:
             logger.exception("get_avaliability failed")
             return False
 
         if not physician or not available_time:
-            logger.info("No availability for %s at %s", ai.physician, ai.appointment_time)
+            logger.info("No availability for %s at %s", self.session.userdata.physician, self.session.userdata.appointment_time)
             return False
-        ai.physician = physician
+        self.session.userdata.physician = physician
 
-        if ai.appointment_time != available_time:
-            ai.appointment_time = available_time
+        if self.session.userdata.appointment_time != available_time:
+            self.session.userdata.appointment_time = available_time
             try:
                 await self.session.generate_reply(
                     instructions=(
@@ -206,16 +196,16 @@ class IntakeAgent(Agent):
             await self.session.generate_reply(
                 instructions=(
                     "Introduce yourself as the HelloHealth appointment scheduling assistant "
-                    "and explain that you need some patient information to schedule an appointment."
+                    "and explain that you need some patient information to schedule an appointment"
                 ),
             )
         except Exception:
             logger.exception("Failed to send on_enter reply for IntakeAgent")
 
     @function_tool()
-    async def record_name(self, context: RunContext[PatientInfo], name: str):
+    async def record_name(self, context: RunContext[PatientInfo], patient_name: str):
         """Use this tool to record the user's name."""
-        context.userdata.patient_name = name.title()
+        context.userdata.patient_name = patient_name.title()
         return await self._handoff_if_done(context)
 
     @function_tool()
@@ -358,7 +348,7 @@ async def entrypoint(ctx: agents.JobContext):
         userdata=PatientInfo(),
         stt=deepgram.STT(model="nova-3", language="multi"),
         llm=openai.LLM(model="gpt-4o-mini"),
-        tts=cartesia.TTS(model="sonic-2", voice="f786b574-daa5-4673-aa0c-cbe3e8534c02"),
+        tts=cartesia.TTS(model="sonic-2", voice="5c42302c-194b-4d0c-ba1a-8cb485c84ab9"),
         vad=silero.VAD.load(),
         turn_detection=MultilingualModel(),
     )
@@ -368,7 +358,7 @@ async def entrypoint(ctx: agents.JobContext):
         agent=IntakeAgent(),
         room_input_options=RoomInputOptions(
             # For telephony applications, use `BVCTelephony` instead for best results
-            noise_cancellation=noise_cancellation.BVC(), 
+            noise_cancellation=noise_cancellation.BVCTelephony(), 
         ),
     )
 if __name__ == "__main__":
