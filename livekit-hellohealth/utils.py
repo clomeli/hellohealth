@@ -182,8 +182,8 @@ async def send_email(userdata) -> bool:
         Thank you for calling HelloHealth. Here are the details of your appointment request:
 
         Patient Name: {userdata.patient_name}
-        Date and Time: {userdata.appointment_info.appointment_date} {userdata.appointment_info.appointment_time}
-        Physician: {userdata.appointment_info.physician}
+        Date and Time: {userdata.appointment_date} {userdata.appointment_time}
+        Physician: {userdata.physician}
         Date of Birth: {userdata.date_of_birth}
         Insurance Payer: {userdata.insurance_payer_name}
         Insurance ID: {userdata.insurance_id}
