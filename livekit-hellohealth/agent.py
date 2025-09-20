@@ -13,7 +13,7 @@ from livekit.plugins import (
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 from livekit.agents.beta.workflows import GetEmailTask
 
-from utils import load_prompt, send_email, get_avaliability, verify_phone, verify_email, verify_physician, to_date_string, to_time_string
+from utils import load_prompt, send_email, get_avaliability, verify_phone, verify_email, verify_physician, to_date_string, to_time_string, get_valid_addresses
 
 load_dotenv(".env.local")
 import logging
@@ -151,11 +151,6 @@ class SchedulingAgent(Agent):
                 except Exception:
                     logger.exception("Failed to notify user of final confirmation")
 
-                try:
-                    await self.session.aclose()
-                except Exception:
-                    logger.exception("Failed to close session cleanly")
-
                 return "Goodbye!"
             return "Sorry — there was an error scheduling your appointment. Please call again later."
         else:
@@ -250,14 +245,29 @@ class IntakeAgent(Agent):
     @function_tool()
     async def record_address(self, context: RunContext[PatientInfo], address: str):
         """Record the user's address."""
-        context.userdata.address = address
+        try:
+            validated_addresses = await get_valid_addresses(address)
+        except Exception:
+            logger.exception("get_valid_addresses failed for: %s", address)
+            return "I couldn't validate that address right now. Please try again."
+        if len(validated_addresses) == 0:
+            return "The address provided seems invalid. Please provide a valid address."
+        elif len(validated_addresses) == 1:
+            context.userdata.address = validated_addresses[0]
+            return f"Address recorded as: {validated_addresses[0]}. If this is incorrect, please provide the correct address."
+        else:
+            logger.info("Multiple address matches found: %s", validated_addresses)
+            return (
+                "Multiple addresses match the information provided. Please specify one of the following options: "
+                + "; ".join(validated_addresses)
+            )
         return await self._handoff_if_done(context)
 
     @function_tool()
     async def record_phone_number(self, context: RunContext[PatientInfo], phone_number: str):
         """Record the user's phone number."""
         try:
-            parsed = verify_phone(phone_number)
+            parsed = await verify_phone(phone_number)
         except Exception:
             logger.exception("verify_phone failed for: %s", phone_number)
             return "I couldn't validate that phone number right now. Please try again."
@@ -273,7 +283,7 @@ class IntakeAgent(Agent):
     async def record_email(self, context: RunContext[PatientInfo], email: str):
         """Record the user's email address."""
         try:
-            valid = verify_email(email)
+            valid = await verify_email(email)
         except Exception:
             logger.exception("verify_email failed for: %s", email)
             return "I couldn't validate that email address right now. Please try again."

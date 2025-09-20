@@ -17,8 +17,13 @@ import logging
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
+import asyncio
 
-def verify_email(email: str) -> bool:
+from smartystreets_python_sdk import StaticCredentials, ClientBuilder
+from smartystreets_python_sdk.us_street import Lookup
+
+
+async def verify_email(email: str) -> bool:
     """Validate an email address.
 
     Returns True when `email` is valid according to `email_validator`, otherwise False.
@@ -34,7 +39,7 @@ def verify_email(email: str) -> bool:
         logger.exception("Unexpected error validating email: %s", email)
         return False
 
-def verify_phone(phone: str, region: str = "US") -> Optional[str]:
+async def verify_phone(phone: str, region: str = "US") -> Optional[str]:
     """Parse and validate a phone number.
 
     Returns an international formatted phone string when valid, otherwise None.
@@ -50,6 +55,43 @@ def verify_phone(phone: str, region: str = "US") -> Optional[str]:
     except Exception:
         logger.exception("Unexpected error parsing phone: %s", phone)
         return None
+
+async def get_valid_addresses(address: str) -> list[str]:
+    """Validate a freeform address string using Smarty (SmartyStreets) when available.
+
+    This function runs the blocking SDK call in a threadpool via
+    `asyncio.get_running_loop().run_in_executor(...)` to avoid blocking the event loop.
+    """
+
+    logger.info("Looking up address: %s", address)
+    auth_id = os.environ.get("SMARTY_AUTH_ID")
+    auth_token = os.environ.get("SMARTY_AUTH_TOKEN")
+
+    # Build client and lookup object (blocking SDK calls will be executed in executor)
+    credentials = StaticCredentials(auth_id, auth_token)
+    client = ClientBuilder(credentials).build_us_street_api_client()
+    lookup = Lookup()
+    # Provide the freeform address in the `street` field; Smarty will attempt to parse it.
+    lookup.street = address
+    lookup.candidates = 3  # max candidates to return
+
+    loop = asyncio.get_running_loop()
+    try:
+        # client.send_lookup is blocking; run in default threadpool
+        await loop.run_in_executor(None, client.send_lookup, lookup)
+    except Exception:
+        logger.exception("Smarty lookup failed for address: %s", address)
+        return []
+
+    # `lookup.result` is a list of candidate objects
+    result = getattr(lookup, "result", None)
+
+    logger.info(result)
+    formatted = []
+    for result in result:
+        formatted.append(result.delivery_line_1 + ", " + result.last_line)
+
+    return formatted
 
 def to_date_string(date_str: str) -> str:
     """Parse a natural-language date and return it as MM-DD-YYYY.
