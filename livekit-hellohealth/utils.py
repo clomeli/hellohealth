@@ -1,7 +1,6 @@
 import os
 import yaml
 
-import dateparser
 import time
 import random
 import csv
@@ -9,19 +8,25 @@ from typing import Dict, List, Optional, Tuple
 import re
 from datetime import datetime
 
+import dateparser
+
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 
 import phonenumbers
 from phonenumbers import NumberParseException, is_valid_number, format_number, PhoneNumberFormat
-from email_validator import validate_email, EmailNotValidError
-import logging
 
-logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+from email_validator import validate_email, EmailNotValidError
+
 import asyncio
 
 from smartystreets_python_sdk import StaticCredentials, ClientBuilder
 from smartystreets_python_sdk.us_street import Lookup
 
+import logging
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 async def verify_email(email: str) -> bool:
     """Validate an email address.
@@ -131,6 +136,41 @@ def load_prompt(filename):
         logger.exception("Error loading prompt file %s: %s", filename, e)
         return ""
 
+def load_emails(filename="emails.txt") -> List[str]:
+    """Load a list of email addresses from a text file in the project root.
+
+    Returns a list of email strings, or an empty list on error.
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    email_path = os.path.join(script_dir, filename)
+
+    try:
+        with open(email_path, 'r') as file:
+            emails = [line.strip() for line in file if line.strip()]
+            return emails
+    except FileNotFoundError:
+        logger.exception("Emails file not found: %s", email_path)
+        return []
+    except Exception:
+        logger.exception("Failed to load emails from file: %s", email_path)
+        return []
+
+def send_email_sendgrid(to_email: str, subject: str, content: str):
+    message = Mail(
+        from_email='scheduling@hellohealth.live',
+        to_emails=to_email,
+        subject=subject,
+        html_content=content
+    )
+    sg = SendGridAPIClient(os.getenv('SENDGRID_API_KEY'))
+    try:
+        response = sg.send(message)
+        print("Status:", response.status_code)
+        return response.status_code, response.body
+    except Exception as e:
+        print("Error sending with SendGrid:", e)
+        raise
+
 async def send_email(userdata) -> bool:
     """Prepare and (stub) send an email summary of the appointment request.
 
@@ -138,24 +178,38 @@ async def send_email(userdata) -> bool:
     Returns True on success.
     """
     try:
-        email_content = (
-            f"Thank you for calling HelloHealth. Here are the details of your appointment request:\n"
-            f"Date and Time: {userdata.appointment_info.appointment_date} {userdata.appointment_info.appointment_time}\n"
-            f"Physician: {userdata.appointment_info.physician}\n"
-            f"Patient Name: {userdata.patient_name}\n"
-            f"Date of Birth: {userdata.date_of_birth}\n"
-            f"Insurance Payer: {userdata.insurance_payer_name}\n"
-            f"Insurance ID: {userdata.insurance_id}\n"
-            f"Reason for Visit: {userdata.reason_for_visit}\n"
-            f"Address: {userdata.address}\n"
-            f"Phone Number: {userdata.phone_number}\n"
-            f"Email: {userdata.email}\n"
-        )
+        email_content = f"""
+        Thank you for calling HelloHealth. Here are the details of your appointment request:
+
+        Patient Name: {userdata.patient_name}
+        Date and Time: {userdata.appointment_info.appointment_date} {userdata.appointment_info.appointment_time}
+        Physician: {userdata.appointment_info.physician}
+        Date of Birth: {userdata.date_of_birth}
+        Insurance Payer: {userdata.insurance_payer_name}
+        Insurance ID: {userdata.insurance_id}
+        Reason for Visit: {userdata.reason_for_visit}
+        Address: {userdata.address}
+        Phone Number: {userdata.phone_number}
+        Email: {userdata.email}
+        """
         logger.info("Simulated send email with content:\n%s", email_content)
-        return True
     except Exception:
         logger.exception("Failed to prepare/send email")
         return False
+    html_content = email_content.replace("\n", "<br>")
+
+    emails = load_emails()
+    if not emails:
+        logger.error("No emails loaded to send notification to.")
+        return False
+    
+    for email in emails:
+        status, _ = send_email_sendgrid(email, "New Appointment Request", html_content)
+        if status != 202:
+            logger.error("Failed to send email to %s, status code: %s", email, status)
+            return False
+    
+    return True
 
 # Regex to strip "Dr." if present
 def normalize_name(name: str) -> str:

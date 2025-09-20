@@ -16,4 +16,4 @@ instructions: |
   - If they do, ask for the name of the referring physician, 
   - Format physician name as "Dr [Last Name]", for internal use only do not present to user
   - Do not proceed until all required information is collected, except referral info which is optional
-
+  - Do not ask for final confirmation unless specified to do so

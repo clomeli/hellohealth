@@ -38,7 +38,7 @@ class PatientInfo:
     reason_for_visit: str | None = None
     address: str | None = None
     phone_number: str | None = None
-    provide_email: bool | None = None
+    provided_email: bool | None = None
     email: str | None = None
     appointment_info: AppointmentInfo = AppointmentInfo()
 
@@ -293,9 +293,17 @@ class IntakeAgent(Agent):
         else:
             return "The email address provided seems invalid. Please provide a valid email address."
         return await self._handoff_if_done(context)
+    
+    @function_tool()
+    async def record_provided_email(self, context: RunContext[PatientInfo], provided_email  : bool):
+        """Record whether the user wants to provide an email address."""
+        context.userdata.provided_email = provided_email
+        if provided_email is False:
+            context.userdata.email = None  # Clear any previously recorded email
+        return await self._handoff_if_done(context)
 
     async def _handoff_if_done(self, context: RunContext[PatientInfo]):
-        def all_info_collected(userdata: PatientInfo) -> bool:
+        def all_required_info_collected(userdata: PatientInfo) -> bool:
             return all([
                 userdata.patient_name is not None,
                 userdata.date_of_birth is not None,
@@ -306,13 +314,15 @@ class IntakeAgent(Agent):
                 userdata.phone_number is not None,
             ])
         logger.info("Current collected info: %s", self.session.userdata)
-        if all_info_collected(self.session.userdata):
-            if provided_email is None:
+        got_required_info = all_required_info_collected(self.session.userdata)
+        logger.info("Got required info: %s", got_required_info)
+        if all_required_info_collected(self.session.userdata):
+            if self.session.userdata.provided_email is None:
                 return (
                     "All required information has been collected. Do you want to provide an email address to receive a confirmation? "
                     "You can say 'yes' to provide an email or 'no' to continue without one."
                 )
-            if provided_email is True and self.session.userdata.email is None:
+            if self.session.userdata.provided_email is True and self.session.userdata.email is None:
                 return (
                     "You indicated you want to provide an email address. Please provide your email address now."
                 )
