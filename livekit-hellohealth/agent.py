@@ -38,6 +38,7 @@ class PatientInfo:
     reason_for_visit: str | None = None
     address: str | None = None
     phone_number: str | None = None
+    provide_email: bool | None = None
     email: str | None = None
     appointment_info: AppointmentInfo = AppointmentInfo()
 
@@ -220,37 +221,37 @@ class IntakeAgent(Agent):
     async def record_name(self, context: RunContext[PatientInfo], name: str):
         """Use this tool to record the user's name."""
         context.userdata.patient_name = name
-        return self._handoff_if_done()
+        return await self._handoff_if_done(context)
 
     @function_tool()
     async def record_date_of_birth(self, context: RunContext[PatientInfo], date_of_birth: str):
         """Record the user's date of birth."""
         context.userdata.date_of_birth = date_of_birth
-        return self._handoff_if_done()
+        return await self._handoff_if_done(context)
 
     @function_tool()
     async def record_insurance_payer_name(self, context: RunContext[PatientInfo], insurance_payer_name: str):
         """Record the user's insurance payer name."""
         context.userdata.insurance_payer_name = insurance_payer_name
-        return self._handoff_if_done()
+        return await self._handoff_if_done(context)
 
     @function_tool()
     async def record_insurance_id(self, context: RunContext[PatientInfo], insurance_id: str):
         """Record the user's insurance ID or policy number."""
         context.userdata.insurance_id = insurance_id
-        return self._handoff_if_done()
+        return await self._handoff_if_done(context)
 
     @function_tool()
     async def record_reason_for_visit(self, context: RunContext[PatientInfo], reason_for_visit: str):
         """Record the reason for the user's visit."""
         context.userdata.reason_for_visit = reason_for_visit
-        return self._handoff_if_done()
+        return await self._handoff_if_done(context)
 
     @function_tool()
     async def record_address(self, context: RunContext[PatientInfo], address: str):
         """Record the user's address."""
         context.userdata.address = address
-        return self._handoff_if_done()
+        return await self._handoff_if_done(context)
 
     @function_tool()
     async def record_phone_number(self, context: RunContext[PatientInfo], phone_number: str):
@@ -266,7 +267,7 @@ class IntakeAgent(Agent):
             context.userdata.phone_number = parsed
         else:
             return "The phone number provided seems invalid. Please provide a valid phone number including area code."
-        return self._handoff_if_done()
+        return await self._handoff_if_done(context)
 
     @function_tool()
     async def record_email(self, context: RunContext[PatientInfo], email: str):
@@ -281,9 +282,9 @@ class IntakeAgent(Agent):
             context.userdata.email = email
         else:
             return "The email address provided seems invalid. Please provide a valid email address."
-        return self._handoff_if_done()
+        return await self._handoff_if_done(context)
 
-    def _handoff_if_done(self):
+    async def _handoff_if_done(self, context: RunContext[PatientInfo]):
         def all_info_collected(userdata: PatientInfo) -> bool:
             return all([
                 userdata.patient_name is not None,
@@ -296,10 +297,17 @@ class IntakeAgent(Agent):
             ])
         logger.info("Current collected info: %s", self.session.userdata)
         if all_info_collected(self.session.userdata):
-            return (
-                "All required information has been collected. Please confirm the details before we schedule the appointment. "
-                "Spell out the full legal name for accuracy."
-            )
+            if provided_email is None:
+                return (
+                    "All required information has been collected. Do you want to provide an email address to receive a confirmation? "
+                    "You can say 'yes' to provide an email or 'no' to continue without one."
+                )
+            if provided_email is True and self.session.userdata.email is None:
+                return (
+                    "You indicated you want to provide an email address. Please provide your email address now."
+                )
+            return await self.confirm_and_end(context, False)
+                
 
         return (
             "Information recorded. Continue gathering the missing details. "
@@ -323,7 +331,7 @@ class IntakeAgent(Agent):
 
             return SchedulingAgent()
         else:
-            return "Okay, please let me know what details need to be updated."
+            return "Here are the details you provided. Please let me know what details need to be updated, or confirm if they are correct."
 
 async def entrypoint(ctx: agents.JobContext):
     session = AgentSession[PatientInfo](
@@ -337,7 +345,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     await session.start(
         room=ctx.room,
-        agent=SchedulingAgent(),
+        agent=IntakeAgent(),
         room_input_options=RoomInputOptions(
             # For telephony applications, use `BVCTelephony` instead for best results
             noise_cancellation=noise_cancellation.BVC(), 
