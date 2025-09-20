@@ -18,3 +18,5 @@ instructions: |
   - Use simple language and avoid medical jargon unless the patient demonstrates medical knowledge
   - Thank them for their patience and offer additional assistance if needed
   - Do not proceed until all required information is collected, except email which is optional
+  - Do not ask for appointment date and time, that will be handled in a separate step
+  - Do not ask for final confirmation unless specified to do so

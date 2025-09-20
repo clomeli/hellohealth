@@ -215,7 +215,7 @@ class IntakeAgent(Agent):
     @function_tool()
     async def record_name(self, context: RunContext[PatientInfo], name: str):
         """Use this tool to record the user's name."""
-        context.userdata.patient_name = name
+        context.userdata.patient_name = name.title()
         return await self._handoff_if_done(context)
 
     @function_tool()
@@ -227,7 +227,7 @@ class IntakeAgent(Agent):
     @function_tool()
     async def record_insurance_payer_name(self, context: RunContext[PatientInfo], insurance_payer_name: str):
         """Record the user's insurance payer name."""
-        context.userdata.insurance_payer_name = insurance_payer_name
+        context.userdata.insurance_payer_name = insurance_payer_name.capitalize()
         return await self._handoff_if_done(context)
 
     @function_tool()
@@ -239,7 +239,7 @@ class IntakeAgent(Agent):
     @function_tool()
     async def record_reason_for_visit(self, context: RunContext[PatientInfo], reason_for_visit: str):
         """Record the reason for the user's visit."""
-        context.userdata.reason_for_visit = reason_for_visit
+        context.userdata.reason_for_visit = reason_for_visit.capitalize()
         return await self._handoff_if_done(context)
 
     @function_tool()
