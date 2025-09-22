@@ -48,7 +48,6 @@ How to run the agent locally
 
 1. Ensure a LiveKit deployment or use a compatible development environment for LiveKit workers.
 2. Populate a `.env.local` (or export env vars) with the required keys listed above.
-3. Run pip install -r requirements.txt
 3. Start the agent from the repo root:
 
 ```bash
