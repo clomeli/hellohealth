@@ -45,10 +45,7 @@ class SchedulingAgent(Agent):
     async def on_enter(self) -> None:
         try:
             await self.session.generate_reply(
-                instructions=(
-                    "Thank you for the information. I will collect your preferred "
-                    "appointment date and time now."
-                ),
+                instructions="Thank you for the information. I will collect your preferred appointment date and time now.",
             )
         except Exception:
             logger.exception("Failed to send on_enter reply")
@@ -73,10 +70,8 @@ class SchedulingAgent(Agent):
             return await self._handoff_if_done(context)
 
         choices = ", ".join(valid_names) if valid_names else ""
-        return (
-            f"The physician name provided does not match our records. Valid names are: {choices}. "
-            "Please provide a valid physician name or say 'continue without a referral'."
-        )
+        return """The physician name provided does not match our records. Valid names are: %s.
+            Please provide a valid physician name or say 'continue without a referral'.""" % choices
 
     @function_tool()
     async def record_appointment_date(self, context: RunContext[PatientInfo], appointment_date: str):
@@ -113,10 +108,8 @@ class SchedulingAgent(Agent):
             if self.session.userdata.has_referral is True and not self.session.userdata.physician:
                 return "You mentioned you have a referral — please provide the referring physician's name."
             return await self.confirm_and_end(context, False)
-        return (
-            "Information recorded. Continue gathering the missing details. "
-            "Please do not end the call until we finish collecting the required information."
-        )
+        return """Information recorded. Continue gathering the missing details.
+            Please do not end the call until we finish collecting the required information."""
     
     @function_tool()
     async def confirm_and_end(self, context: RunContext[PatientInfo], confirmed: bool):
@@ -134,11 +127,8 @@ class SchedulingAgent(Agent):
             if success:
                 try:
                     await self.session.generate_reply(
-                            instructions=(
-                                "Tell them it was scheduled successfully."
-                                "Tell them If an email was provided, a confirmation has been sent. "
-                                "Thank them for choosing HelloHealth. Goodbye!"
-                            )
+                            instructions="""Tell them it was scheduled successfully. Tell them If an email was provided,
+                                a confirmation has been sent. Thank them for choosing HelloHealth. Ask them to hang up when done. Say Goodbye!""",
                         )
                 except Exception:
                     logger.exception("Failed to notify user of final confirmation")
@@ -166,10 +156,8 @@ class SchedulingAgent(Agent):
             self.session.userdata.appointment_time = available_time
             try:
                 await self.session.generate_reply(
-                    instructions=(
-                        f"Your preferred time is unavailable. The nearest available time with {physician} is {available_time}; "
-                        "I will book that instead."
-                    )
+                    instructions=f"""Your preferred time is unavailable. The nearest available time with {physician}
+                        is {available_time}; I will book that instead.""",
                 )
             except Exception:
                 logger.exception("Failed to notify user of adjusted time")
@@ -194,10 +182,8 @@ class IntakeAgent(Agent):
     async def on_enter(self) -> None:
         try:
             await self.session.generate_reply(
-                instructions=(
-                    "Introduce yourself as the HelloHealth appointment scheduling assistant "
-                    "and explain that you need some patient information to schedule an appointment"
-                ),
+                instructions="""Introduce yourself as the HelloHealth appointment scheduling assistant
+                    and explain that you need some patient information to schedule an appointment""",
             )
         except Exception:
             logger.exception("Failed to send on_enter reply for IntakeAgent")
@@ -247,10 +233,8 @@ class IntakeAgent(Agent):
             return f"Address recorded as: {validated_addresses[0]}. If this is incorrect, please provide the correct address."
         else:
             logger.info("Multiple address matches found: %s", validated_addresses)
-            return (
-                "Multiple addresses match the information provided. Please specify one of the following options: "
-                + "; ".join(validated_addresses)
-            )
+            return """Multiple addresses match the information provided. Please specify one of the following options:
+             %s""" % ("; ".join(validated_addresses))
         return await self._handoff_if_done(context)
 
     @function_tool()
@@ -306,49 +290,32 @@ class IntakeAgent(Agent):
         logger.info("Current collected info: %s", self.session.userdata)
         got_required_info = all_required_info_collected(self.session.userdata)
         logger.info("Got required info: %s", got_required_info)
-        if all_required_info_collected(self.session.userdata):
+        if got_required_info:
             if self.session.userdata.provided_email is None:
-                return (
-                    "All required information has been collected. Do you want to provide an email address to receive a confirmation? "
-                    "You can say 'yes' to provide an email or 'no' to continue without one."
-                )
+                return """All required information has been collected. Do you want to provide an email address to
+                    receive a confirmation? You can say 'yes' to provide an email or 'no' to continue without one."""
             if self.session.userdata.provided_email is True and self.session.userdata.email is None:
-                return (
-                    "You indicated you want to provide an email address. Please provide your email address now."
-                )
+                return """You indicated you want to provide an email address. Please provide your email address now."""
             return await self.confirm_and_end(context, False)
                 
-
-        return (
-            "Information recorded. Continue gathering the missing details. "
-            "Please do not end the call until all required information is collected. Providing an email is optional but recommended."
-        )
+        return """Information recorded. Continue gathering the missing details. Please do not end the call until all required
+            information is collected. Providing an email is optional but recommended."""
 
     @function_tool()
     async def confirm_and_end(self, context: RunContext[PatientInfo], confirm: bool):
         """When the user confirms all details, forward to SchedulingAgent."""
         if confirm:
             logger.info("Final collected patient info: %s", self.session.userdata)
-            try:
-                await self.session.generate_reply(
-                    instructions=(
-                        "Thank you for providing your information. If you would like, "
-                        "please provide an email address to receive a confirmation."
-                    ),
-                )
-            except Exception:
-                logger.exception("Failed to send confirmation prompt before handoff")
-
             return SchedulingAgent()
-        else:
-            return "Here are the details you provided. Please let me know what details need to be updated, or confirm if they are correct."
+        return """Read back all provided info. Spell out their full name and email if provided, letter by letter.
+            Please let me know what details need to be updated, or confirm that they are correct."""
 
 async def entrypoint(ctx: agents.JobContext):
     session = AgentSession[PatientInfo](
         userdata=PatientInfo(),
         stt=deepgram.STT(model="nova-3", language="multi"),
         llm=openai.LLM(model="gpt-4o-mini"),
-        tts=cartesia.TTS(model="sonic-2", voice="5c42302c-194b-4d0c-ba1a-8cb485c84ab9"),
+        tts=cartesia.TTS(model="sonic-2", voice="f786b574-daa5-4673-aa0c-cbe3e8534c02"),
         vad=silero.VAD.load(),
         turn_detection=MultilingualModel(),
     )
@@ -362,4 +329,4 @@ async def entrypoint(ctx: agents.JobContext):
         ),
     )
 if __name__ == "__main__":
-    agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint))
+    agents.cli.run_app(agents.WorkerOptions(entrypoint_fnc=entrypoint, agent_name="telephony_agent"))
